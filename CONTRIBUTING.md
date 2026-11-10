@@ -1,6 +1,6 @@
 # Contributing to Rose
 
-Contributions are welcome! Report bugs or suggest features through the [issue forms](https://github.com/Alban1911/Rose/issues/new/choose), submit pull requests, or join our [Discord](https://discord.com/invite/roseskins) for discussions and installation help.
+Contributions are welcome! Report bugs or suggest features through the [issue forms](https://github.com/obrihas2/rose-party/issues/new/choose), submit pull requests, or join our [Discord](https://discord.com/invite/roseskins) for discussions and installation help.
 
 ## Reporting bugs
 
@@ -20,7 +20,7 @@ conda create -n rose python=3.11 -y
 conda activate rose
 
 # Clone the repository
-git clone https://github.com/Alban1911/Rose.git
+git clone https://github.com/obrihas2/rose-party.git
 
 # Navigate to project directory
 cd Rose
