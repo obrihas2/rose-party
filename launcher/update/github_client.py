@@ -17,12 +17,12 @@ from utils.download import github_rate_limit
 
 log = get_logger()
 
-GITHUB_RELEASE_API = "https://api.github.com/repos/obrihas2/asda/releases/latest"
+GITHUB_RELEASE_API = "https://api.github.com/repos/obrihas2/rose-party/releases/latest"
 # github.com answers these without spending GitHub API calls (60 an hour per IP
 # without a login): the latest release's page redirects to its tag, and the
 # update package of a tag has a fixed name (scripts/create_update_package.py)
-RELEASES_LATEST_URL = "https://github.com/obrihas2/asda/releases/latest"
-RELEASE_DOWNLOAD_URL = "https://github.com/obrihas2/asda/releases/download/{tag}/{name}"
+RELEASES_LATEST_URL = "https://github.com/obrihas2/rose-party/releases/latest"
+RELEASE_DOWNLOAD_URL = "https://github.com/obrihas2/rose-party/releases/download/{tag}/{name}"
 UPDATE_PACKAGE_NAME = "update_package_{version}.zip"
 
 

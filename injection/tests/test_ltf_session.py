@@ -2445,7 +2445,7 @@ class FailureCauseTests(unittest.TestCase):
         """#454: the refused WAD came from an official skin's chroma, and the
         hint said to use the official one"""
         hint = ltk_failure_hint("LTK Manager disabled the overlay (wad x: base-skin check)")
-        self.assertIn("obrihas2/asda", hint)
+        self.assertIn("obrihas2/rose-party", hint)
         self.assertNotIn("or the official one", hint)
 
     def test_a_dll_that_never_got_into_the_game(self):

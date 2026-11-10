@@ -2,10 +2,10 @@
 ; This creates a proper Windows installer that registers the app
 
 #define MyAppName "Rose"
-#define MyAppVersion "1.5.6"
-#define MyAppVersionInfo "1.5.6.0"
+#define MyAppVersion "1.5.7"
+#define MyAppVersionInfo "1.5.7.0"
 #define MyAppPublisher "Rose Team"
-#define MyAppURL "https://github.com/obrihas2/asda"
+#define MyAppURL "https://github.com/obrihas2/rose-party"
 #define MyAppExeName "Rose.exe"
 #define MyAppDescription "Effortless skin changer for League of Legends"
 ; Must match config.SINGLE_INSTANCE_MUTEX_NAME (used by the app to enforce single-instance)

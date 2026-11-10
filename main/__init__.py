@@ -484,7 +484,7 @@ def _warn_pengu_injection_failed(client_pid: int) -> None:
             "Right-click Rose's system tray icon and choose Diagnose Rose startup. "
             "Keep League open while collecting the report.\n\n"
             "Then send report.txt and report.json on the Rose Discord (https://discord.gg/roseskins) "
-            "or in a GitHub issue (https://github.com/obrihas2/asda/issues), so we can find out why. "
+            "or in a GitHub issue (https://github.com/obrihas2/rose-party/issues), so we can find out why. "
             "You can also paste them into an AI assistant for a first look.",
             "Rose - Client injection failed",
             0x50030,  # MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST

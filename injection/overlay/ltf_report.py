@@ -151,7 +151,7 @@ def ltk_failure_hint(reason: str) -> str:
         return ("LTK Manager's integrity check turned the overlay off because of a mod: the reason names its "
                 "WAD. LTK Manager refuses a skin made of another skin's files. For a custom skin, use another "
                 "one; for one of Rose's skins or chromas, the package is at fault: pick another skin or chroma "
-                f"and report it at github.com/obrihas2/asda/issues. {logs}")
+                f"and report it at github.com/obrihas2/rose-party/issues. {logs}")
     if cause == "ltk_admin":
         return ("Windows refuses to start one of LTK Manager's programs without administrator rights: it is set "
                 "to run as administrator. Untick \"Run this program as an administrator\" in the Compatibility "

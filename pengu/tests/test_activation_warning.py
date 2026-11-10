@@ -79,7 +79,7 @@ class PenguInjectionWarningTests(unittest.TestCase):
         text = message_box.call_args[0][1]
         self.assertIn('Diagnose Rose startup', text)
         self.assertIn('discord.gg/roseskins', text)
-        self.assertIn('github.com/obrihas2/asda/issues', text)
+        self.assertIn('github.com/obrihas2/rose-party/issues', text)
 
     def test_a_dialog_error_is_logged_not_raised(self):
         with (
