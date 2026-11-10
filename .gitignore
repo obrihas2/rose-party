@@ -125,9 +125,6 @@ Rose_PunchTest*.spec
 Rose_PartyTest.spec
 relay_server.py
 
-# Relay config (contains Worker URL — keep secret)
-party/network/relay_config.py
-
 # Cython build artifacts
 *.pyd
 *.c

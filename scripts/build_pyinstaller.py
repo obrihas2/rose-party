@@ -90,7 +90,7 @@ def build_ltf():
 
 
 def check_relay_config():
-    """Refuse to build without the gitignored party relay config (party mode would ship broken)."""
+    """Refuse to build without the party relay config (party mode would ship broken)."""
     config = ROOT / "party" / "network" / "relay_config.py"
     if not config.exists() or "RELAY_URL" not in config.read_text(encoding="utf-8"):
         print(f"[ERROR] Missing {config.relative_to(ROOT)} - party mode cannot reach its relay without it")

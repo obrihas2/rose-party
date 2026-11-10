@@ -27,7 +27,7 @@ def _keys_path() -> Path:
 
 
 def load_shared_room_key() -> str:
-    """Return the private shared room key embedded in this private build."""
+    """Return the shared room key embedded in this build."""
     if not _ROOM_KEY_RE.fullmatch(SHARED_ROOM_KEY):
         raise RuntimeError("Party Mode shared room key is invalid in this build")
     return SHARED_ROOM_KEY

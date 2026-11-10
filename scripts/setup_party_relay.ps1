@@ -67,6 +67,6 @@ New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
 Set-Content -Path $RelayConfig -Value "RELAY_URL = `"$WssUrl`"`r`n" -Encoding utf8
 
 Write-Host "Relay is ready: $WssUrl" -ForegroundColor Green
-Write-Host "Local config written to: $RelayConfig" -ForegroundColor Green
-Write-Host "The config is ignored by Git and will not be published." -ForegroundColor DarkGray
+Write-Host "Relay config written to: $RelayConfig" -ForegroundColor Green
+Write-Host "The config is tracked by Git — commit it so every build uses this relay." -ForegroundColor DarkGray
 Write-Host "Next step: run python scripts/build_pyinstaller.py from the Rose repository root." -ForegroundColor Cyan

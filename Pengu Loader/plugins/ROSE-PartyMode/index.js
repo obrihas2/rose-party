@@ -698,7 +698,7 @@
         <span class="party-status offline">${t("Offline")}</span>
       </div>
       <div class="party-content">
-        <div class="party-description">${t("Share your skins with friends in the same game. Everyone using the same private Party Mode room appears automatically; tokens are only needed to add a specific peer or connect to an older setup.")}</div>
+        <div class="party-description">${t("Share your skins with friends in the same game. Everyone using the same Party Mode room appears automatically; tokens are only needed to add a specific peer or connect to an older setup.")}</div>
 
         <div class="party-section" id="party-toggle-section">
           <button class="party-toggle-btn enable" id="party-toggle-btn">

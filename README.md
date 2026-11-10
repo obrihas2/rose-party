@@ -50,15 +50,15 @@ dashboard; raw activity and server credentials remain private.
 
 - **rose-party-relay**: Durable Object-backed WebSocket relay that manages party rooms (max 10 members per room) for real-time skin selection broadcasting between friends. It refuses Rose versions older than 1.4.4
 
-#### Private Party relay setup
+#### Party relay setup
 
-The private Party build needs a relay URL, but it does not require hosting on a personal IP address. Create a Cloudflare account, install Node.js LTS, then run this from the repository root:
+The Party build needs a relay URL, but it does not require hosting on a personal IP address. Create a Cloudflare account, install Node.js LTS, then run this from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_party_relay.ps1
 ```
 
-The script installs the Worker dependencies, opens Cloudflare login, deploys `relay-worker`, verifies its health endpoint, and writes the local ignored file `party/network/relay_config.py`. Approve the browser login yourself; never paste Cloudflare tokens into chat. Cloudflare plan limits and billing requirements can change, so enable usage/billing alerts in the Cloudflare dashboard before deployment.
+The script installs the Worker dependencies, opens Cloudflare login, deploys `relay-worker`, verifies its health endpoint, and writes `party/network/relay_config.py` (tracked in Git, so every build uses the same relay). Approve the browser login yourself; never paste Cloudflare tokens into chat. Cloudflare plan limits and billing requirements can change, so enable usage/billing alerts in the Cloudflare dashboard before deployment.
 
 ### Pengu Loader Plugins
 
@@ -95,13 +95,13 @@ Rose includes a suite of JavaScript plugins that extend the League Client UI:
 - **Open Source**: Fully open source and extensible
 - **Free**: If you bought this software, you got scammed 💀
 
-This private build embeds one 32-character hexadecimal shared-room key, so only
-copies of this specific build join the group room. Do not publish the source or
-binary: anyone who obtains either can recover the bearer key and join the room.
-Party Mode auto-enables after League is ready and remains enabled while Rose is
-running, retrying relay failures automatically. The existing UI toggle can
-temporarily disable or re-enable it, but the always-on supervisor will restore
-the connection.
+This build embeds one 32-character hexadecimal shared-room key (hardcoded in
+`party/core/party_storage.py`), so every copy of this build joins the same
+group room — the key ships with the source, which is the intended trade-off
+for a shared group room. Party Mode auto-enables after League is ready and
+remains enabled while Rose is running, retrying relay failures automatically.
+The existing UI toggle can temporarily disable or re-enable it, but the
+always-on supervisor will restore the connection.
 
 ## Requirements
 

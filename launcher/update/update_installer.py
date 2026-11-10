@@ -24,7 +24,7 @@ PERSISTENT_ROOT_FILES = ("icon.ico", "unins000.exe", "unins000.dat")
 # In frozen builds, files are under _internal/
 PERSISTENT_USER_FILES = ()
 
-# The private Party Mode implementation is compiled inside Rose.exe (the
+# The Party Mode implementation is compiled inside Rose.exe (the
 # PyInstaller PYZ archive), never shipped as loose _internal files, so an
 # update cannot silently drop it: releases built from this branch carry it.
 # The old PROTECTED_PARTY_FILES preservation checked paths that do not exist
