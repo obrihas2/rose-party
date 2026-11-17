@@ -1,0 +1,130 @@
+name: Release
+
+# Builds and publishes the update package and installer whenever config.py
+# carries a version that has not been released yet. Runs the same checks as
+# CI first, verifies the built executable still carries Party Mode, then
+# creates the GitHub release the in-app updater points at.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Read version
+        id: ver
+        run: |
+          version=$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' config.py)
+          if [ -z "$version" ]; then
+            echo "::error::APP_VERSION not found in config.py"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version."
+
+      - name: Skip when this version is already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $VERSION already exists; nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.exists.outputs.exists == 'false'
+        run: python -m pip install -r requirements.txt ruff==0.16.8 pyinstaller
+
+      - name: Lint (syntax errors and undefined names only)
+        if: steps.exists.outputs.exists == 'false'
+        run: python -m ruff check . --select E9,F63,F7,F82
+
+      - name: Unit tests (test/ and every package's tests/)
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          suites=("test")
+          for dir in */; do
+            dir="${dir%/}"
+            if [ -d "$dir/tests" ]; then suites+=("$dir/tests"); fi
+          done
+          failed=()
+          for suite in "${suites[@]}"; do
+            echo "::group::$suite"
+            python -m unittest discover -s "$suite" -t . || failed+=("$suite")
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::Failing suites: ${failed[*]}"
+            exit 1
+          fi
+
+      - name: JavaScript checks
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          git ls-files -z 'Pengu Loader/plugins/*.js' | xargs -0 -n1 node --check
+          for t in $(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u); do
+            node --test "$t"
+          done
+
+      - name: Install Inno Setup
+        if: steps.exists.outputs.exists == 'false'
+        run: choco install innosetup --no-progress -y
+
+      - name: Build executable, installer and update package
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          python scripts/build_all.py
+          python scripts/create_update_package.py
+
+      - name: Verify Party Mode is in the build
+        if: steps.exists.outputs.exists == 'false'
+        run: python scripts/verify_party_build.py
+
+      - name: Publish release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            "installer/Rose_Setup_${VERSION}.exe" \
+            "installer/update_package_${VERSION}.zip" \
+            --title "$VERSION" \
+            --notes "Party Mode build tracking upstream Alban1911/Rose ${VERSION}.
+
+          Update from within Rose, or install fresh with Rose_Setup_${VERSION}.exe. Party Mode is included and enables itself once League is running."
