@@ -45,7 +45,7 @@ jobs:
       - name: Read version
         id: ver
         run: |
-          version=$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' config.py)
+          version=$(sed -n 's/^APP_VERSION = "\([^"]*\)".*/\1/p' config.py)
           if [ -z "$version" ]; then
             echo "::error::APP_VERSION not found in config.py"
             exit 1
