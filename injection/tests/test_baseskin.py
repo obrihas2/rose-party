@@ -10,8 +10,10 @@ import os
 import shutil
 import struct
 import tempfile
+import tracemalloc
 import unittest
 import zipfile
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,7 +26,8 @@ from injection.baseskin.audio import AudioBanks, MergeContext, SharedUnit
 from injection.baseskin.bnk import Bank, wwise_hash
 from injection.baseskin.package import character_names, split_wad_name
 from injection.baseskin.propbin import (
-    EMBED, HASH, LIST, POINTER, STRING, Bin, Embed, Entry, Field, Value, build, entry_types, fnv1a_lower,
+    EMBED, HASH, LIST, NONE, POINTER, STRING, U8, Bin, Embed, Entry, Field, PropError, Value, build, entry_types,
+    fnv1a_lower,
 )
 from injection.baseskin.wad import BytesSource, FileSource, GameWad, ModWad, WadError, path_hash
 from injection.mods.mod_facts import archive_index_hash
@@ -183,6 +186,42 @@ class PropBinTests(unittest.TestCase):
     def test_a_file_that_is_not_a_bin_lists_no_types(self):
         self.assertEqual(entry_types(b"RW\x03\x04"), [])
         self.assertEqual(entry_types(build([skin_entry()])), [SKIN_DATA])
+
+    def test_a_list_of_nones_is_refused_whatever_count_it_gives(self):
+        # NONE values take no bytes: the count alone would have the reader build billions
+        data = _skin_bin_of(struct.pack("<H", 1) + struct.pack("<IBBII", 1, LIST, NONE, 4, 0xFFFFFFFF))
+        with self.assertRaises(PropError):
+            Bin(data).find_entry(SKIN_DATA)
+
+    def test_a_container_size_only_has_to_stay_within_the_data(self):
+        # Like Rosebin: a size that disagrees with values that still parse is
+        # ignored, one that runs past the end of the data is refused
+        items = struct.pack("<I", 1) + b"\x07"
+        for size, readable in ((len(items) - 1, True), (len(items) + 1, True), (0xFFFFFF00, False)):
+            fields = struct.pack("<H", 2) + struct.pack("<IBBI", 1, LIST, U8, size) + items
+            fields += struct.pack("<IB", 2, U8) + b"\x08"
+            with self.subTest(size=size):
+                if readable:
+                    self.assertIsNotNone(Bin(_skin_bin_of(fields)).find_entry(SKIN_DATA))
+                else:
+                    with self.assertRaises(PropError):
+                        Bin(_skin_bin_of(fields)).find_entry(SKIN_DATA)
+
+    def test_a_bin_nested_too_deep_comes_back_as_it_came(self):
+        fields = struct.pack("<H", 0)
+        for _ in range(2000):
+            fields = struct.pack("<H", 1) + struct.pack("<IBII", 7, EMBED, 9, len(fields)) + fields
+        data = _skin_bin_of(fields)
+        with self.assertRaises(PropError):
+            Bin(data).find_entry(SKIN_DATA)
+        runner = steps.BaseSkinSteps(None, Path("Aatrox.wad.client"))
+        self.assertIs(runner.apply_all([("aatrox", data)])[0], data)
+
+
+def _skin_bin_of(fields):
+    """A bin whose one SkinCharacterDataProperties entry holds *fields* (raw bytes, count first)."""
+    body = struct.pack("<I", H("Characters/Aatrox/Skins/Skin0")) + fields
+    return b"PROP" + struct.pack("<IIII", 3, 0, 1, SKIN_DATA) + struct.pack("<I", len(body)) + body
 
 
 def _rewritten(data):
@@ -612,6 +651,26 @@ class WadTests(unittest.TestCase):
             wad.get(path_hash(TEX)).data
         self.assertTrue(issubclass(WadError, ValueError))
 
+    def test_a_file_that_inflates_far_past_its_table_is_cut_off_not_built(self):
+        zeros = bytes(24 * 1024 * 1024)
+        bombs = {
+            "gzip": (0x01, zlib.compress(zeros, 9, wbits=31)),
+            "zstd": (0x03, zstandard.ZstdCompressor().compress(zeros)),
+            "chunked": (0x14, b"RAW!" + zstandard.ZstdCompressor().compress(zeros)),
+        }
+        del zeros
+        for name, (type_byte, payload) in bombs.items():
+            with self.subTest(name):
+                wad = ModWad(hand_written_wad([(TEX, type_byte, payload, 64)]))
+                tracemalloc.start()
+                try:
+                    with self.assertRaises(WadError):
+                        wad.get(path_hash(TEX)).data
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    tracemalloc.stop()
+                self.assertLess(peak, 8 * 1024 * 1024)
+
     def test_the_games_wad_reads_sub_chunked_files(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "Aatrox.wad.client"
@@ -826,12 +885,80 @@ class FixModTests(_GameAndMod):
         self.assertFalse(fix_mod(self.archive, self.root / "elsewhere").changed)
         self.assertEqual(self.archive.read_bytes(), before)
 
-    def test_unpacked_wad_folders_are_left_alone(self):
-        with zipfile.ZipFile(self.archive, "w") as archive:
-            archive.writestr("WAD/Aatrox.wad.client/data/characters/aatrox/skins/skin0.bin", self.skin_bin)
+    UNPACKED = "WAD/Aatrox.wad.client/"
+
+    def write_unpacked_mod(self, files):
+        """The mod with its champion WAD as a folder of loose files, {name in the folder: content}"""
+        with zipfile.ZipFile(self.archive, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("META/info.json", '{"Name": "custom"}')
+            for name, data in files.items():
+                archive.writestr(self.UNPACKED + name, data)
+
+    def unpacked_files(self):
+        with zipfile.ZipFile(self.archive) as archive:
+            return {name[len(self.UNPACKED):]: archive.read(name)
+                    for name in archive.namelist() if name.startswith(self.UNPACKED)}, archive.namelist()
+
+    def test_an_unpacked_wad_folder_is_fixed_and_stays_a_folder(self):
+        self.write_unpacked_mod({SKIN0_BIN: self.skin_bin, SKIN_SKL: b"custom-skl", SKIN_SKN: b"custom-skn",
+                                 SFX: self.skin_bank})
+
+        result = fix_mod(self.archive, self.game)
+
+        self.assertTrue(result.changed)
+        self.assertTrue(result.complete)
+        files, names = self.unpacked_files()
+        self.assertNotIn("WAD/Aatrox.wad.client", names)  # not packed into a WAD file
+        self.assertEqual(sorted(files), sorted([SKIN0_BIN, SKIN_SKL, SKIN_SKN, SFX, BASE_SKL, BASE_SKN]))
+        skin = Bin(files[SKIN0_BIN]).find_entry(SKIN_DATA)
+        self.assertEqual(steps.skin_name(skin), "Aatrox")
+        self.assertEqual(steps.mesh_paths(skin), [BASE_SKL, BASE_SKN])
+        self.assertEqual(files[BASE_SKL], b"custom-skl" + bytes(16))
+        self.assertEqual(files[BASE_SKN], b"custom-skn" + bytes(16))
+        self.assertEqual(Bank.parse(files[SFX]).event_actions(wwise_hash("Play_sfx_Aatrox_Q")), [33])
+        with zipfile.ZipFile(self.archive) as archive:
+            self.assertEqual(archive.read("META/info.json"), b'{"Name": "custom"}')
+        self.assertEqual(list(self.root.glob(".rose-import-*")), [])
+
+        fixed = self.archive.read_bytes()
+        self.assertFalse(fix_mod(self.archive, self.game).changed)
+        self.assertEqual(self.archive.read_bytes(), fixed)
+
+    def test_a_file_an_unpacked_folder_names_by_its_hash_is_edited_under_that_name(self):
+        """A WAD extractor names a file whose path it does not know by its hash"""
+        hashed_bin = f"{path_hash(SKIN0_BIN):016x}.bin"
+        hashed_skn = f"{path_hash(BASE_SKN):016X}"
+        self.write_unpacked_mod({hashed_bin: self.skin_bin, hashed_skn: b"old-base-skn",
+                                 SKIN_SKL: b"custom-skl", SKIN_SKN: b"custom-skn", SFX: self.skin_bank})
+
+        self.assertTrue(fix_mod(self.archive, self.game).changed)
+
+        files, _ = self.unpacked_files()
+        self.assertNotIn(SKIN0_BIN, files)
+        self.assertNotIn(BASE_SKN, files)
+        self.assertEqual(steps.skin_name(Bin(files[hashed_bin]).find_entry(SKIN_DATA)), "Aatrox")
+        self.assertEqual(files[hashed_skn], b"custom-skn" + bytes(16))
+
+    def test_a_hash_named_file_below_the_folders_root_is_known_by_its_path(self):
+        nested = f"data/{path_hash(SKIN0_BIN):016x}"
+        self.write_unpacked_mod({nested: self.skin_bin})
         before = self.archive.read_bytes()
         self.assertFalse(fix_mod(self.archive, self.game).changed)
         self.assertEqual(self.archive.read_bytes(), before)
+
+    def test_a_mod_stored_as_a_folder_with_an_unpacked_wad_is_fixed_in_place(self):
+        folder = self.root / "folder-mod" / "WAD" / "Aatrox.wad.client"
+        for name, data in {SKIN0_BIN: self.skin_bin, SKIN_SKL: b"c-skl", SKIN_SKN: b"c-skn",
+                           SFX: self.skin_bank}.items():
+            (folder / name).parent.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_bytes(data)
+
+        self.assertTrue(fix_mod(self.root / "folder-mod", self.game).changed)
+
+        self.assertEqual((folder / BASE_SKN).read_bytes(), b"c-skn" + bytes(16))
+        self.assertEqual(steps.skin_name(Bin((folder / SKIN0_BIN).read_bytes()).find_entry(SKIN_DATA)), "Aatrox")
+        self.assertFalse(fix_mod(self.root / "folder-mod", self.game).changed)
+        self.assertEqual(list(self.root.rglob(".rose-import-*")), [])
 
     def folder_mod(self):
         folder = self.root / "folder-mod"
@@ -989,6 +1116,18 @@ class StoredSkinsTests(_GameAndMod):
         self.assertFalse(stop())
         state.phase = "Matchmaking"
         self.assertTrue(stop())
+
+    def test_the_pass_runs_on_the_home_screen(self):
+        """The phase thread keeps the home screen as None in the shared state"""
+        manager = SimpleNamespace(injector=SimpleNamespace(game_dir=self.game), _injection_in_progress=False)
+        state = SimpleNamespace(phase=None)
+        for phase in (None, "None"):
+            with patch.object(library, "fix_stored_skins", return_value=0) as run, \
+                    patch("injection.mods.storage.ModStorageService"):
+                library.on_phase(phase, manager, state)
+                library._pass_thread.join(10)
+            run.assert_called_once()
+            self.assertFalse(run.call_args.args[2](), "stopped on the home screen")
 
 
 class PackageHelpersTests(unittest.TestCase):

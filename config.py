@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 # APPLICATION METADATA
 # =============================================================================
 
-APP_VERSION = "1.5.7"                           # Application version
+APP_VERSION = "1.5.8"                           # Application version
 APP_USER_AGENT = f"Rose/{APP_VERSION}"  # User-Agent header for HTTP requests
 GAME_EXECUTABLE_NAMES = ("League of Legends.exe", "League of Legends (TM) Client.exe")
 
@@ -200,6 +200,9 @@ WS_PING_INTERVAL_DEFAULT = 20  # Seconds between WebSocket pings
 WS_PING_TIMEOUT_DEFAULT = 10   # Seconds before WebSocket ping times out
 WS_RECONNECT_DELAY = 1.0       # Seconds to wait before WebSocket reconnect
 WS_RECONNECT_MAX_DELAY = 15.0  # Maximum delay after repeated connection failures
+# A starting client opens its WebSocket some seconds after its lockfile: retried at
+# WS_RECONNECT_DELAY this many times before the delay grows
+WS_RECONNECT_FAST_ATTEMPTS = 30
 WS_RECONNECT_JITTER = 0.25     # Randomized delay fraction to avoid synchronized retries
 
 # Lock detection timing

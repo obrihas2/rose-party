@@ -66,7 +66,6 @@ class PhaseHandler:
                     self.swiftplay_handler.monitor_swiftplay_matchmaking()
                     if not self.swiftplay_handler._injection_triggered:
                         self.swiftplay_handler.trigger_swiftplay_injection()
-                        self.swiftplay_handler._injection_triggered = True
         
         elif phase == "ChampSelect":
             self._sync_saved_mods_for_listing()
@@ -122,10 +121,6 @@ class PhaseHandler:
                 # Normal ChampSelect handling
                 from threads.handlers.champ_select_reset import perform_champ_select_reset
                 perform_champ_select_reset(self.state, self.lcu)
-                self.state.locked_champ_id = None
-                self.state.locked_champ_timestamp = 0.0
-                self.state.champion_exchange_triggered = False
-                self.state.own_champion_locked = False
 
                 # Backup UI initialization
                 try:
@@ -175,6 +170,7 @@ class PhaseHandler:
             if self.state.is_swiftplay_mode and self.swiftplay_handler:
                 # Check if we're still in a Swiftplay/Quickplay lobby
                 if self.state.current_queue_id in SWIFTPLAY_QUEUE_IDS:
+                    self.swiftplay_handler.discard_swiftplay_preparation()
                     log.info(f"[phase] Returned to Lobby from {previous_phase} - still in Swiftplay queue ({self.state.current_queue_id}), preserving skin tracking")
                 else:
                     log.info(f"[phase] Returned to Lobby from {previous_phase} - queue changed, cleaning up Swiftplay state")

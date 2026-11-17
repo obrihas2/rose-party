@@ -55,6 +55,34 @@ jobs:
         run: git ls-files -z 'Pengu Loader/plugins/*.js' | xargs -0 -n1 node --check
       - name: Party Mode reconnect regression tests
         run: node --test test/party_ui_reconnect.test.cjs
+      - name: ROSE-UI observer lifecycle regression tests
+        run: node --test test/ui_visibility_listener.test.cjs
+      - name: Custom mods reconnect regression tests
+        run: node --test test/custom_wheel_reconnect.test.cjs
+      - name: Custom skin selector in-game regression tests
+        run: node --test test/custom_skin_selector_ingame.test.cjs
+      - name: Skin Monitor port rediscovery regression tests
+        run: node --test test/skinmonitor_port_rediscovery.test.cjs
+      - name: Custom Wheel bulk delete regression tests
+        run: node --test test/custom_wheel_bulk_delete.test.cjs
+
+  relay-worker:
+    name: Party relay (type check, protocol tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: relay-worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
 
   python:
     name: Python (errors lint, unit tests)

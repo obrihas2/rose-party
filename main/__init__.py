@@ -414,7 +414,7 @@ import utils.integration.pengu_loader as pengu_loader
 from state import AppStatus
 from utils.core.logging import get_logger, log_success
 from utils.core.issue_reporter import report_issue
-from utils.threading.thread_manager import create_daemon_thread
+from utils.threading.thread_manager import ThreadManager, create_daemon_thread
 from config import APP_VERSION, MAIN_LOOP_FORCE_QUIT_TIMEOUT_S, get_config_option, set_config_option
 from injection.config.config_manager import ConfigManager
 from injection.game.game_detector import GameDetector
@@ -773,6 +773,15 @@ def run_league_unlock(args: Optional[argparse.Namespace] = None,
             timeout_thread.start()
 
         tray_manager.restart_callback = updated_tray_restart_callback
+
+        # A Quit or Restart clicked while Rose was starting runs now
+        tray_manager.run_pending_request()
+
+    # Stopped while starting (a Quit or Restart clicked then): end before the
+    # threads start and Pengu's activation restarts a running client
+    if state.stop:
+        perform_cleanup(state, ThreadManager(), tray_manager, injection_manager)
+        return
     
     # Initialize threads (this starts the WebSocket server)
     thread_manager, t_phase, t_ui, t_ws, t_lcu_monitor = initialize_threads(
@@ -823,17 +832,16 @@ def _remove_ltk_mods() -> int:
     --remove-ltk-mods when the user does not keep Rose's data. It checked
     that Rose is closed and waits for this, hidden: no single-instance check,
     no launcher, no dialog, and a watchdog ends it should LTK Manager hang."""
-    import os
     import threading
 
     from config import UNINSTALL_CLEANUP_DEADLINE_S
     from injection.overlay.ltf_session import LtfHost
     from injection.overlay.ltk_library import remove_rose_mods
-    from utils.core.logging import setup_logging
+    from utils.core.logging import exit_now, setup_logging
     from utils.core.paths import get_injection_dir, get_tools_dir
 
     setup_logging('customer')
-    watchdog = threading.Timer(UNINSTALL_CLEANUP_DEADLINE_S, os._exit, args=(1,))
+    watchdog = threading.Timer(UNINSTALL_CLEANUP_DEADLINE_S, exit_now, args=(1,))
     watchdog.daemon = True
     watchdog.start()
     try:
@@ -851,6 +859,7 @@ def main() -> None:
     # Update before checking the DLL: a Rose that refuses to start still
     # receives the version that fixes its check
     if sys.platform == "win32":
+        check_single_instance()
         if not args.dev:
             try:
                 from launcher import run_launcher

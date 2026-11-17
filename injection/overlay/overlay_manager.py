@@ -29,8 +29,10 @@ from ..mods.fingerprint import mod_fingerprint
 from ..mods.ltk_ref import split_mod_names
 from ..mods.mod_files import is_mod_archive
 from utils.core.modpkg import is_modpkg
+from utils.system.process_list import running_processes
 from .ltf_report import (
     LATE_JOIN_MESSAGE,
+    LAUNCHER_ELEVATED_DETAIL,
     LTF_LOGS_HINT,
     LTK_ACL_REFUSAL,
     NOT_ATTACHED_MESSAGE,
@@ -471,10 +473,22 @@ class OverlayManager:
                     before_ids = {str(e.get("id")) for e in shared_library_read if e.get("id")}
                     entry = self.host.import_archive(ltf, Path(archive), folder, display_name, fingerprint,
                                                      before_ids=before_ids)
+                    # LTK Manager answers an archive its library holds already with that entry
+                    if str(entry.get("id")) in before_ids:
+                        shared_library_read = [e for e in shared_library_read
+                                               if str(e.get("id")) != str(entry.get("id"))]
                     shared_library_read.append(entry)
-                    if not entry.get("enabled"):
-                        bridge.toggle(str(entry.get("id")), True)
-                    log.info(f"[INJECT] Installed {display_name} into LTK Manager")
+                    # Under the session's lock, as SavedModSwitches.switch: one that
+                    # ended during the import removed it (LtfHost._track)
+                    with ltf.lock:
+                        if ltf.ended:
+                            log.info("[INJECT] Stopped while the mods were being installed")
+                            return False
+                        if not entry.get("enabled"):
+                            bridge.toggle(str(entry.get("id")), True)
+                            entry["enabled"] = True
+                    if str(entry.get("id")) not in before_ids:
+                        log.info(f"[INJECT] Installed {display_name} into LTK Manager")
                 except (OSError, BridgeUnavailable, BridgeCommandError) as e:
                     log.error(f"[INJECT] Could not install {display_name}: {e}")
                     if report and not stopped():
@@ -777,12 +791,16 @@ class OverlayManager:
                 except (BridgeUnavailable, BridgeCommandError) as e:
                     log.warning(f"[INJECT] Could not turn off {entry_name(entry)} - it may apply too: {e}")
                 continue
-            self.host.track_disabled(ltf, mod_id)
-            try:
-                bridge.toggle(mod_id, False)
-                log.info(f"[INJECT] Turned off {entry_name(entry)} in LTK Manager for this game")
-            except (BridgeUnavailable, BridgeCommandError) as e:
-                log.warning(f"[INJECT] Could not turn off {entry_name(entry)} - it may apply too: {e}")
+            # Under the session's lock: one that ended turns back on only what it found off
+            with ltf.lock:
+                if ltf.ended:
+                    return
+                self.host.track_disabled(ltf, mod_id)
+                try:
+                    bridge.toggle(mod_id, False)
+                    log.info(f"[INJECT] Turned off {entry_name(entry)} in LTK Manager for this game")
+                except (BridgeUnavailable, BridgeCommandError) as e:
+                    log.warning(f"[INJECT] Could not turn off {entry_name(entry)} - it may apply too: {e}")
         self._disable_broken_entries(session, library)
 
     def _disable_broken_entries(self, session: dict, library: List[dict]) -> None:
@@ -1443,17 +1461,24 @@ class OverlayManager:
             # launcher could not do that, its lines in this log say why (#478)
             parent = self.host.logged_manager_parent
             unparented = parent is not None and parent != LAUNCHER_SHELL_PARENT
+            # Why it was not: Windows refused the launcher's helper, Rose's
+            # ltk_launcher.exe being set to run as administrator
+            launcher_elevated = unparented and self.host.logged_launcher_elevated is True
             if unparented:
                 log.error(
                     f"[INJECT] LTK Manager was not started under explorer.exe ({parent}), which the patcher's "
                     "check refuses - the ltk_launcher lines above say why"
                 )
+            if launcher_elevated:
+                log.error(f"[INJECT] {LAUNCHER_ELEVATED_DETAIL}")
             if not self._stopped_by_rose():
                 details = [f"host verification failed: {described}"]
                 if signature:
                     details.append(f"{SIGNATURE_FAILURE_MESSAGE}, {signature}")
                 if unparented:
                     details.append(f"LTK Manager's parent was not explorer.exe ({parent})")
+                if launcher_elevated:
+                    details.append(LAUNCHER_ELEVATED_DETAIL)
                 report_ltf_failure(f"LTK Manager's patcher refused the overlay ({'; '.join(details)})")
         not_attached = session.get("ltk_not_attached")
         if not_attached and not session.get("ltk_attached") and not session.get("not_attached_reported"):
@@ -1529,9 +1554,17 @@ class OverlayManager:
             return None
         names = {name.lower() for name in GAME_EXECUTABLE_NAMES}
         try:
-            for proc in psutil.process_iter(['name']):
-                if (proc.info.get('name') or '').lower() in names:
-                    return proc
+            # Called every 50 ms while the game is held, and during the game
+            for pid, name in running_processes():
+                if name.lower() not in names:
+                    continue
+                try:
+                    game = psutil.Process(pid)
+                    # Windows can reuse the PID after the snapshot was taken.
+                    if game.name().lower() in names:
+                        return game
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
         except (psutil.Error, OSError) as e:
             log.debug(f"[INJECT] Could not look for the game process: {e}")
         return None

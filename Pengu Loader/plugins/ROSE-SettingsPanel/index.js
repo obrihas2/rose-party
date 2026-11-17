@@ -2094,6 +2094,23 @@
     document.querySelectorAll(".rose-language-menu").forEach((menu) => menu.remove());
   }
 
+  // The (i) icon whose tooltip is shown. One listener pair for every panel
+  // opened: the flyout is rebuilt on each open and its icons go with it.
+  let _tooltipOwner = null;
+  function repositionSettingsTooltip() {
+    if (!_tooltipOwner) return;
+    const tt = document.getElementById("rose-global-tooltip");
+    if (!tt || tt.getAttribute("data-show") !== "true") return;
+    if (!_tooltipOwner.btn.isConnected) {
+      _tooltipOwner = null;
+      return;
+    }
+    _tooltipOwner.reposition();
+  }
+  // Keep tooltip in correct position while resizing/scrolling
+  window.addEventListener("resize", repositionSettingsTooltip);
+  window.addEventListener("scroll", repositionSettingsTooltip, true);
+
   function createSettingsFlyout(navItem) {
     closeLanguageMenu();
     // Remove existing panel if any
@@ -2221,6 +2238,7 @@
     }
 
     function hideGlobalTooltip() {
+      _tooltipOwner = null;
       const el = document.getElementById("rose-global-tooltip");
       if (!el) return;
       el.setAttribute("data-show", "false");
@@ -2272,22 +2290,17 @@
         e.stopPropagation();
       });
 
-      const show = () => showGlobalTooltipFor(btn, tooltipText);
+      const reposition = () => showGlobalTooltipFor(btn, tooltipText);
+      const show = () => {
+        _tooltipOwner = { btn, reposition };
+        reposition();
+      };
       const hide = () => hideGlobalTooltip();
 
       btn.addEventListener("mouseenter", show);
       btn.addEventListener("mouseleave", hide);
       btn.addEventListener("focus", show);
       btn.addEventListener("blur", hide);
-
-      // Keep tooltip in correct position while resizing/scrolling
-      const reposition = () => {
-        const tt = document.getElementById("rose-global-tooltip");
-        if (!tt || tt.getAttribute("data-show") !== "true") return;
-        showGlobalTooltipFor(btn, tooltipText);
-      };
-      window.addEventListener("resize", reposition);
-      window.addEventListener("scroll", reposition, true);
 
       wrapper.appendChild(btn);
       return wrapper;
@@ -5131,6 +5144,12 @@
         ? t("LTK Manager found problems it can't repair in {name}, so it won't be playable. {reason}", { name, reason }).trim()
         : t("LTK Manager found problems it can't repair in this mod, so it won't be playable. {reason}", { reason }).trim();
     }
+    if (item.code === "ltk_cleanup_failed") {
+      // Not "Failed to import": the mod was added, and stays
+      return several
+        ? t("LTK Manager rejected {name}, but Rose could not remove it. It is still in your library.", { name })
+        : t("LTK Manager rejected this mod, but Rose could not remove it. It is still in your library.");
+    }
     return t("Failed to import {name}: {error}", { name, error: item.error || "" });
   }
 
@@ -5574,12 +5593,25 @@
           };
         }
 
+        if (code === 'LAUNCHER_ELEVATED') {
+          const detail = String(e?.detail || '').trim();
+          return {
+            title: t("Rose's launcher is set to run as administrator"),
+            details: [
+              t("What it means: Windows' compatibility settings run Rose's ltk_launcher.exe as administrator, so Windows refuses to start it for your Windows account, LTK Manager does not start under explorer.exe and its patcher refuses the skins. Rose could not take that setting off by itself: {detail}", { detail }),
+              t('Fix: untick "Run this program as an administrator" in the Compatibility tab of the Properties of ltk_launcher.exe, in Rose\'s _internal\\injection\\tools folder (for one marked "all users", under "Change settings for all users"), then restart Rose.'),
+            ],
+          };
+        }
+
         if (code === 'LTF_FAILED') {
           const detail = String(e?.detail || '').trim();
           // Why it failed (ltk_failure_cause in overlay_manager.py): what to
           // do depends on it
           const fixes = {
             start: () => t("Fix: Rose could not start the LTK patcher. Check that ltk_launcher.exe and LeagueToolFlop.dll are still in Rose's tools folder: an antivirus may have removed them."),
+            inject: () => t("Fix: Rose's launcher started LTK Manager but could not get into it. With err=5 (access denied) above, Windows or an antivirus refused it: add Rose's folder to your antivirus exclusions, update Rose, then retry. If Rose runs as administrator through another Windows account than the one you are signed in with, make your own account an administrator instead."),
+            launcher_admin: () => t('Fix: Windows refused to start Rose\'s ltk_launcher.exe because it is set to run as administrator, so LTK Manager did not start under explorer.exe. Rose takes that setting off before it starts LTK Manager: retry the next game. If it happens again, untick "Run this program as an administrator" in the Compatibility tab of the Properties of ltk_launcher.exe, in Rose\'s _internal\\injection\\tools folder (also under "Change settings for all users"), then restart Rose.'),
             running: () => t('Fix: close LTK Manager (also from the system tray), then retry. Rose starts it with its bridge and closes it again after the game.'),
             late: () => t('Fix: the game started before the patcher was ready. Retry the next game.'),
             bridge: () => t('Fix: LTK Manager closed while the game was running. Retry the next game. If it happens every game, report it with your Rose logs.'),
@@ -5721,11 +5753,14 @@
     const recS = typeof recMs === "number" ? (recMs / 1000).toFixed(2) : null;
     const curThresholdVal = typeof currentSettings?.threshold === "number" ? currentSettings.threshold : null;
     const needsIncrease = recS !== null && curThresholdVal !== null && curThresholdVal < parseFloat(recS) - 0.001;
+    // A lower value only when Rose has enough games to back it (base_skin_tracker.py)
+    const canDecrease = recS !== null && curThresholdVal !== null && stats.can_recommend_lower === true &&
+      curThresholdVal > parseFloat(recS) + 0.001;
     const games = stats.confirmed_count;
     const label = games > 1 ? t("{count} games", { count: games }) : t("{count} game", { count: games });
 
     let html;
-    if (needsIncrease) {
+    if (needsIncrease || canDecrease) {
       const recommended = `<span style="color:#c89b3c; font-weight:700;">${recS}s</span>`;
       html = `<span style="color:#c8aa6e;">${escapeHtml(t("Based on {games}, we recommend {value}", { games: label })).replace("{value}", recommended)}</span>`;
       html += ` <button id="rose-apply-recommended-btn" style="

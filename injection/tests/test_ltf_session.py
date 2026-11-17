@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import io
 import json
 import tempfile
@@ -13,7 +14,7 @@ from unittest.mock import MagicMock, patch
 from injection.mods import manifest
 from injection.mods.ltk_ref import ltk_ref
 from injection.overlay import ltf_report, ltf_session, ltk_data, overlay_manager
-from injection.overlay.ltf_report import ltk_failure_cause, ltk_failure_hint
+from injection.overlay.ltf_report import has_ltf_logs_hint, ltk_failure_cause, ltk_failure_hint
 from injection.overlay.ltf_session import LtfHost, LtfSession
 from injection.overlay.overlay_manager import OverlayManager
 from injection.overlay.process_manager import ProcessManager
@@ -75,6 +76,10 @@ class FakeBridge:
     # Answer an install with the whole entry it created (id, names, enabled),
     # not its id alone
     full_install_answer = False
+    # Answer an install as LTK Manager does ({kind, mod}), an archive whose
+    # bytes an entry already came from with that entry (alreadyInstalled)
+    outcome_answers = False
+    held_archives = {}  # SHA-256 of an archive -> the id of the entry installed from it
     # The health_check_off answer; None: a bridge older than the command
     health_check_answer = {"ok": True, "changed": False}
     # Library entries LTK Manager cannot read, logged to broken_log at each read
@@ -101,6 +106,8 @@ class FakeBridge:
         cls.patcher_statuses = []
         cls.initial_library = []
         cls.full_install_answer = False
+        cls.outcome_answers = False
+        cls.held_archives = {}
         cls.health_check_answer = {"ok": True, "changed": False}
         cls.broken_ids = []
         cls.broken_log = None
@@ -138,6 +145,12 @@ class FakeBridge:
         return [dict(entry) for entry in self.library_entries]
 
     def _install(self, file_name, name, data):
+        if FakeBridge.outcome_answers:
+            sha = hashlib.sha256(data).hexdigest()
+            held = next((e for e in self.library_entries if e["id"] == FakeBridge.held_archives.get(sha)), None)
+            if held is not None:
+                return {"ok": True, "response": {"ok": True, "value": {"kind": "alreadyInstalled",
+                                                                        "mod": dict(held)}}}
         mod_id = str(uuid.uuid4())
         entry = {
             "id": mod_id,
@@ -151,12 +164,16 @@ class FakeBridge:
             mod_dir.with_name(f"{mod_dir.name}.fantome").write_bytes(data)
             entry.update({"modDir": str(mod_dir), "storage": "archive", "format": "fantome"})
         self.library_entries.append(entry)
+        if FakeBridge.outcome_answers:
+            FakeBridge.held_archives[hashlib.sha256(data).hexdigest()] = mod_id
+            return {"ok": True, "response": {"ok": True, "value": {"kind": "installed", "mod": dict(entry)}}}
         value = dict(entry) if FakeBridge.full_install_answer else {"id": mod_id}
         return {"ok": True, "response": {"ok": True, "value": value}}
 
     def import_fantome(self, path, name=None):
         self.calls.append(("import", path, name))
-        return self._install(path, name, Path(path).read_bytes() if FakeBridge.mod_storage is not None else b"")
+        read = FakeBridge.mod_storage is not None or FakeBridge.outcome_answers
+        return self._install(path, name, Path(path).read_bytes() if read else b"")
 
     def import_fantome_bytes(self, data, name):
         self.calls.append(("import_bytes", len(data), name))
@@ -289,6 +306,7 @@ class LtfSessionTestCase(unittest.TestCase):
             patch.object(ltk_data.LtkLogTail, "log_dir", staticmethod(lambda: self.ltk_logs)),
             patch.object(ltf_session, "ltk_logs_dir", lambda: self.root / "logs" / "ltk"),
             patch("utils.system.windows_account.check_ltk_settings", return_value=False),
+            patch("utils.system.windows_account.check_launcher_settings", return_value=False),
             patch.object(ltf_session, "launcher_log_paths",
                          lambda: (self.root / "logs" / "ltk" / "ltk_launcher.log",
                                   self.root / "Public" / "ltk_launcher.log",
@@ -647,8 +665,26 @@ class InjectionSessionTests(LtfSessionTestCase):
         self.assertIn("WARNING", launcher_lines[0])
         self.assertIn("starting it as a child", launcher_lines[0])
         self.assertEqual(self.host.logged_manager_parent, "not explorer.exe")
+        self.assertFalse(self.host.logged_launcher_elevated)
         self.assertFalse(public_log.exists())
         self.assertFalse(temp_log.exists())
+
+    def test_windows_refusing_the_launchers_helper_is_kept(self):
+        launch = self.launcher_writing([
+            "[launch] explorer.exe (pid=6016) as the parent",
+            "[warn] CreateProcessAsUser err=1314",
+            "[warn] helper spawn err=740",
+            "[warn] spawn with explorer.exe as the parent failed (err=87) - starting it as a child",
+            "[launch] spawned pid = 12168 (suspended), parent pid = 12024 (not explorer.exe)",
+        ])
+        mod = self.make_mod()
+        with patch.object(ltf_session, "find_bridge", return_value=None), \
+                patch.object(ltf_session.subprocess, "run", side_effect=launch):
+            self.overlay.mk_run_overlay([mod], stop_callback=lambda: True)
+
+        self.assertTrue(self.host.logged_launcher_elevated)
+        self.assertEqual(self.host.logged_manager_parent, "not explorer.exe")
+        self.assertIsNone(self.host.logged_launcher_error)
 
     def test_the_launcher_logs_into_roses_logs_folder(self):
         """The LTF logs go to Rose's logs\\ltk folder (Open Logs folder), not
@@ -725,6 +761,58 @@ class InjectionSessionTests(LtfSessionTestCase):
         self.assertEqual(result, 1)
         self.assertIn("LTF_FAILED", self.reported_codes())
         self.assertEqual(self.reported_causes(), ["start"])
+
+    def launcher_writing(self, lines, returncode=0, stdout="LTK_MANAGER_PID=4242\n"):
+        """A launcher run that logs *lines* into Rose's launcher log."""
+        rose_log = ltf_session.launcher_log_paths()[0]
+
+        def launch(*args, **kwargs):
+            rose_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(rose_log, "a", encoding="utf-8") as handle:
+                handle.write("========== ltk_launcher ==========\r\n" + "".join(f"{line}\r\n" for line in lines))
+            return MagicMock(returncode=returncode, stdout=stdout)
+
+        return launch
+
+    def test_a_launcher_that_could_not_inject_its_bridge_names_its_error(self):
+        """Exit code 4: the launcher's files are there, so the hint to look for
+        them misled; Windows refused OpenProcess on the LTK Manager it started
+        (err=5) when Rose ran as another Windows account than the desktop user"""
+        launch = self.launcher_writing([
+            "[warn] no explorer.exe (pid=5172) to parent LTK Manager to (err=5)",
+            "[launch] spawned pid = 12368 (suspended), parent pid = 12308 (no shell parent)",
+            "[err] OpenProcess(pid=12368) err=5",
+            "[err] injection failed - terminating ltk-manager.exe",
+        ], returncode=4, stdout="")
+        mod = self.make_mod()
+        with patch.object(ltf_session, "find_bridge", return_value=None), \
+                patch.object(ltf_session.subprocess, "run", side_effect=launch):
+            result = self.overlay.mk_run_overlay([mod], stop_callback=lambda: True)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(self.reported_causes(), ["inject"])
+        (reason,) = [call.args[2] for call in self.report_issue.call_args_list if call.args[0] == "LTF_FAILED"]
+        self.assertIn("exit code 4: it could not inject its bridge into LTK Manager; "
+                      "OpenProcess(pid=12368) err=5)", reason)
+        self.assertNotIn("terminating", reason)  # what followed from it
+
+    def test_the_launchers_setting_is_checked_before_it_runs(self):
+        """Rose takes "Run as administrator" off its own ltk_launcher.exe
+        before running it: once it runs, Windows has refused its helper"""
+        order = []
+        no_bridge, _ = self.launched()
+
+        def launch(*args, **kwargs):
+            order.append("launcher")
+            return MagicMock(returncode=0, stdout="LTK_MANAGER_PID=4242\n")
+
+        mod = self.make_mod()
+        with no_bridge, patch.object(ltf_session.subprocess, "run", side_effect=launch), \
+                patch("utils.system.windows_account.check_launcher_settings",
+                      side_effect=lambda: order.append("setting")):
+            self.overlay.mk_run_overlay([mod], stop_callback=lambda: True)
+
+        self.assertEqual(order, ["setting", "launcher"])
 
     def test_a_bridge_that_never_comes_up_closes_the_launched_manager(self):
         mod = self.make_mod()
@@ -893,6 +981,146 @@ class LibraryOwnershipTests(LtfSessionTestCase):
         self.assertEqual(result, 1)
         self.assertEqual(self.bridge.library_entries, [])
         self.assertEqual(self.state()["installed"], {})
+
+
+class HeldEntryTests(LtfSessionTestCase):
+    """LTK Manager installs nothing for an archive its library already holds:
+    it answers with the entry holding it (alreadyInstalled), or with an older
+    version of the mod it updated in place. Rose failed the injection with
+    "<mod> is not in the library after the import"."""
+
+    font = {"id": "user-font", "name": "Font Chinese", "displayName": "Font Chinese", "enabled": False}
+
+    def setUp(self):
+        super().setUp()
+        FakeBridge.outcome_answers = True
+
+    def archive_mod(self, name="Font Chinese"):
+        """A saved mod's archive, put into the mods folder as Rose links one"""
+        with zipfile.ZipFile(self.mods / name, "w") as packed:
+            packed.writestr("META/info.json", json.dumps({"Name": name}))
+            packed.writestr("WAD/UI.wad.client", b"font")
+        return name
+
+    def users_copy(self, mod, enabled=False):
+        """The user installed the very same archive in LTK Manager"""
+        FakeBridge.initial_library = [dict(self.font, enabled=enabled)]
+        FakeBridge.held_archives[hashlib.sha256((self.mods / mod).read_bytes()).hexdigest()] = "user-font"
+
+    def run_game(self, mods):
+        during = {}
+
+        def stop():
+            during.setdefault("library", [(e["id"], e["enabled"]) for e in self.bridge.library_entries])
+            during.setdefault("state", self.host.journal.read())
+            return True
+
+        return self.overlay.mk_run_overlay(mods, stop_callback=stop), during
+
+    def test_a_mod_ltk_manager_already_holds_is_used_and_left_there(self):
+        mod = self.archive_mod()
+        self.users_copy(mod, enabled=False)
+
+        result, during = self.run_game([mod])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(self.reported_codes(), [])
+        self.assertEqual(during["library"], [("user-font", True)])
+        self.assertEqual(during["state"]["installed"], {}, "the user's: never removed as Rose's")
+        self.assertEqual(during["state"]["switched"], {"user-font": "Font Chinese"},
+                         "a crash leaves it for the next start to switch off")
+        self.assertNotIn("uninstall", self.bridge.command_names())
+        self.assertEqual(self.bridge.library_entries, [self.font], "off again, as it was found")
+        self.assertEqual(self.host.journal.read()["switched"], {})
+
+    def test_one_the_user_had_on_stays_on(self):
+        mod = self.archive_mod()
+        self.users_copy(mod, enabled=True)
+
+        result, during = self.run_game([mod])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(during["library"], [("user-font", True)])
+        self.assertEqual(during["state"]["switched"], {})
+        self.assertNotIn(("toggle", "user-font", False), self.bridge.calls)
+        self.assertEqual(self.bridge.library_entries, [dict(self.font, enabled=True)])
+        self.assertEqual(self.host.journal.read()["disabled"], [])
+
+    def test_a_crash_leaves_the_held_mod_on_and_the_next_session_switches_it_off(self):
+        FakeBridge.initial_library = [dict(self.font, enabled=True)]
+        self.state_path.write_text(json.dumps({"switched": {"user-font": "Font Chinese"}}), encoding="utf-8")
+
+        self.overlay.start_patcher_early()
+
+        self.assertIn(("toggle", "user-font", False), self.bridge.calls)
+        self.assertNotIn("uninstall", self.bridge.command_names())
+        self.assertEqual(self.host.journal.read()["switched"], {})
+
+    def test_a_held_mod_and_a_new_skin_install_side_by_side(self):
+        mod = self.archive_mod()
+        self.users_copy(mod)
+
+        result, during = self.run_game([mod, self.make_mod()])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(during["library"]), 2)
+        self.assertTrue(all(enabled for _, enabled in during["library"]))
+        self.assertEqual(self.bridge.library_entries, [self.font], "Rose's skin removed, the user's left")
+
+    def test_a_mod_ltk_manager_updated_in_place_stays_the_users(self):
+        FakeBridge.initial_library = [dict(self.font)]
+
+        def update_in_place(bridge_self, path, name=None):
+            bridge_self.calls.append(("import", path, name))
+            entry = dict(bridge_self.library_entries[0])
+            return {"ok": True, "response": {"ok": True, "value": {"kind": "updated", "mod": entry}}}
+
+        with patch.object(FakeBridge, "import_fantome", update_in_place):
+            result, during = self.run_game([self.archive_mod()])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(during["library"], [("user-font", True)])
+        self.assertNotIn("uninstall", self.bridge.command_names())
+        self.assertEqual(self.bridge.library_entries, [self.font])
+
+    def test_an_answer_naming_a_held_entry_alone_is_that_entry_when_nothing_was_created(self):
+        FakeBridge.initial_library = [dict(self.font)]
+
+        def answer_with_the_held_entry(bridge_self, path, name=None):
+            bridge_self.calls.append(("import", path, name))
+            return {"ok": True, "response": {"ok": True, "value": {"id": "user-font"}}}
+
+        with patch.object(FakeBridge, "import_fantome", answer_with_the_held_entry):
+            result, during = self.run_game([self.archive_mod()])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(during["library"], [("user-font", True)])
+        self.assertNotIn("uninstall", self.bridge.command_names())
+        self.assertEqual(self.bridge.library_entries, [self.font])
+
+    def test_a_new_install_answered_with_its_outcome_is_not_looked_up_again(self):
+        FakeBridge.initial_library = [dict(self.font, id="user-map", name="Map", displayName="Map", enabled=True)]
+
+        self.assertEqual(self.overlay.mk_run_overlay([self.make_mod()], stop_callback=lambda: True), 0)
+
+        self.assertEqual(self.bridge.library_reads, 1)
+        self.assertEqual([e["id"] for e in self.bridge.library_entries], ["user-map"])
+
+    def test_a_held_mod_no_longer_selected_is_left_as_it_was_found(self):
+        mod = self.archive_mod()
+        self.users_copy(mod)
+        session = self.overlay._acquire_session()
+        self.addCleanup(self.overlay._end_session, session)
+
+        self.assertTrue(self.overlay._install_mods(session, [mod]))
+        self.assertIn(("toggle", "user-font", True), self.bridge.calls)
+        self.assertTrue(self.overlay._install_mods(session, [self.make_mod()]))
+
+        self.assertNotIn(("uninstall", "user-font"), self.bridge.calls)
+        self.assertEqual(self.bridge.calls[-1][0], "import", "switched off before the skin's import")
+        self.assertIn(("toggle", "user-font", False), self.bridge.calls)
+        self.assertEqual(self.host.journal.read()["switched"], {})
+        self.assertNotIn("user-font", session["ltf"].imports)
 
 
 class StaleCleanupTests(LtfSessionTestCase):
@@ -1076,6 +1304,30 @@ class KeptModsTests(LtfSessionTestCase):
         self.assertIn(("uninstall", old_id), self.bridge.calls)
         self.assertEqual(len(self.bridge.library_entries), 1)
         self.assertEqual(list(self.state()["kept"]), [self.bridge.library_entries[0]["id"]])
+
+    def test_a_newer_version_ltk_manager_updates_in_place_stays_rose_s_kept_copy(self):
+        """LTK Manager updates the kept copy of the saved mod's older version under its own id"""
+        from injection.mods.fingerprint import mod_fingerprint
+        voiceover = self.saved_mod()
+        self.overlay.mk_run_overlay([voiceover], stop_callback=lambda: True)
+        kept_id = next(iter(self.state()["kept"]))
+        self.write_archive(self.saved / f"{voiceover}.fantome", voiceover, "VO Korean", b"a newer voiceover")
+        self.next_game()
+
+        def update_in_place(bridge_self, path, name=None):
+            bridge_self.calls.append(("import", path, name))
+            entry = next(e for e in bridge_self.library_entries if e["id"] == kept_id)
+            return {"ok": True, "response": {"ok": True, "value": {"kind": "updated", "mod": dict(entry)}}}
+
+        with patch.object(FakeBridge, "import_fantome", update_in_place):
+            self.assertEqual(self.overlay.mk_run_overlay([voiceover], stop_callback=lambda: True), 0)
+
+        self.assertNotIn(("uninstall", kept_id), self.bridge.calls)
+        self.assertEqual([(e["id"], e["enabled"]) for e in self.bridge.library_entries], [(kept_id, False)])
+        kept = self.state()["kept"]
+        self.assertEqual(list(kept), [kept_id])
+        self.assertEqual(kept[kept_id]["fingerprint"], mod_fingerprint(self.saved / f"{voiceover}.fantome"))
+        self.assertEqual((self.state()["installed"], self.state()["switched"]), ({}, {}))
 
     def test_an_older_copy_that_cannot_be_removed_stays_recorded(self):
         voiceover = self.saved_mod()
@@ -1714,6 +1966,23 @@ class PatcherStatusParsingTests(LtfSessionTestCase):
         self.assertIn("LTK Manager's patcher refused the overlay (host verification failed: VRF00000007 (18776); "
                       "LTK Manager's parent was not explorer.exe (not explorer.exe))", reason)
 
+    def test_a_refusal_after_windows_refused_the_launchers_helper_names_its_setting(self):
+        """VRF00000007 with ltk_launcher.exe set to run as administrator: the
+        hint to update Rose did not help, taking the setting off does"""
+        session = self._session()
+        self.host.logged_manager_parent = "not explorer.exe"
+        self.host.logged_launcher_elevated = True
+        FakeBridge.patcher_statuses = [status(session={"log": (
+            "2026-11-16T15:15:23.000000Z  INFO ltk_manager_runtime::patcher::injector: [ltk-dll pid=1 tid=2 ERROR] "
+            "ltk_patcher_dll::verify: host verification failed, refusing overlay: [VRF00000007] (12024)")})]
+
+        self.overlay._poll_patcher_status(session)
+
+        self.assertEqual(self.reported_causes(), ["launcher_admin"])
+        (reason,) = [call.args[2] for call in self.report_issue.call_args_list if call.args[0] == "LTF_FAILED"]
+        self.assertIn("LTK Manager's parent was not explorer.exe (not explorer.exe); "
+                      f"{ltf_report.LAUNCHER_ELEVATED_DETAIL})", reason)
+
     def test_a_refusal_with_a_manager_under_explorer_names_no_parent(self):
         session = self._session()
         self.host.logged_manager_parent = "explorer.exe"
@@ -2345,6 +2614,22 @@ class FailureCauseTests(unittest.TestCase):
     def test_start_failures(self):
         self.assertEqual(ltk_failure_cause("could not start the LTF launcher (exit code 3)"), "start")
         self.assertEqual(ltk_failure_cause("could not start the LTK patcher (denied)"), "start")
+
+    def test_a_launcher_that_could_not_get_into_ltk_manager_is_no_missing_file(self):
+        reason = ("could not start the LTF launcher (exit code 4: it could not inject its bridge into LTK Manager; "
+                  "OpenProcess(pid=12368) err=5)")
+        self.assertEqual(ltk_failure_cause(reason), "inject")
+        self.assertIn("antivirus", ltk_failure_hint(reason))
+        self.assertTrue(has_ltf_logs_hint(ltk_failure_hint(reason)))
+
+    def test_the_launchers_setting_explains_the_refusal(self):
+        """Before "refused" and before LTK Manager's own programs' error 740"""
+        reason = ("LTK Manager's patcher refused the overlay (host verification failed: VRF00000007 (12024); "
+                  "LTK Manager's parent was not explorer.exe (not explorer.exe); "
+                  f"{ltf_report.LAUNCHER_ELEVATED_DETAIL})")
+        self.assertEqual(ltk_failure_cause(reason), "launcher_admin")
+        self.assertIn("ltk_launcher.exe", ltk_failure_hint(reason))
+        self.assertTrue(has_ltf_logs_hint(ltk_failure_hint(reason)))
 
     def test_patcher_refusals_over_administrator_rights(self):
         """#430: LTK refuses to patch League set to run as administrator, or
