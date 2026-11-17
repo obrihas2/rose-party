@@ -1,9 +1,10 @@
 name: Sync upstream
 
 # Keeps this fork current with Alban1911/Rose: merges upstream/main into
-# party-mode-hardcoded, guards the Party Mode customizations, runs the same
-# checks as CI, then fast-forwards main. On a merge conflict it opens an
-# issue instead of pushing anything.
+# party-mode-hardcoded, keeps our version of the Party Mode files whenever
+# upstream collides with them, takes everything else literally, runs the same
+# checks as CI, then fast-forwards main. A conflict outside the Party Mode
+# list, a lost invariant or a failed check opens an issue instead of pushing.
 
 on:
   schedule:
@@ -75,8 +76,56 @@ jobs:
             cat conflict-files.txt
           fi
 
+      - name: Keep our Party Mode files on conflict
+        if: steps.upstream.outputs.new == 'true'
+        id: keep
+        run: |
+          # Party Mode lives in files this fork owns. When upstream edits the
+          # same lines, keep our version automatically instead of blocking the
+          # sync; every other conflict still stops the run for a human.
+          party_files=(
+            "party/core/party_storage.py"
+            "party/core/party_manager.py"
+            "party/tests/test_party.py"
+            "pengu/communication/message_handler.py"
+            "main/__init__.py"
+            "launcher/update/github_client.py"
+            "party/network/relay_config.py"
+            "Pengu Loader/plugins/ROSE-PartyMode/index.js"
+          )
+          kept=()
+          while IFS= read -r -d '' f; do
+            for p in "${party_files[@]}"; do
+              if [ "$f" = "$p" ]; then
+                if git checkout --ours -- "$f" && git add "$f"; then
+                  kept+=("$f")
+                fi
+                break
+              fi
+            done
+          done < <(git diff --name-only -z --diff-filter=U)
+          remaining=$(git diff --name-only --diff-filter=U | wc -l)
+          if [ "$remaining" -eq 0 ]; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U > conflict-files.txt
+            echo "::error::$remaining merge conflict(s) outside the Party Mode file list"
+            cat conflict-files.txt
+          fi
+          if [ ${#kept[@]} -gt 0 ]; then
+            {
+              echo "### Sync kept our Party Mode version"
+              echo
+              printf -- '- `%s`\n' "${kept[@]}"
+              echo
+              echo "Upstream's edits to these files were skipped this run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Kept ours for: ${kept[*]}"
+          fi
+
       - name: Report merge conflict
-        if: steps.merge.outputs.conflict == 'true'
+        if: steps.merge.outputs.conflict == 'true' && steps.keep.outputs.clean == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
@@ -102,7 +151,7 @@ jobs:
           exit 1
 
       - name: Guard Party Mode invariants
-        if: steps.merge.outputs.conflict != 'true' && steps.upstream.outputs.new == 'true'
+        if: steps.keep.outputs.clean == 'true' && steps.upstream.outputs.new == 'true'
         id: guard
         run: |
           failed=""
@@ -140,15 +189,15 @@ jobs:
           exit 1
 
       - name: Install test dependencies
-        if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
         run: python -m pip install -r requirements.txt ruff==0.16.8
 
       - name: Lint (syntax errors and undefined names only)
-        if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
         run: python -m ruff check . --select E9,F63,F7,F82
 
       - name: Unit tests (test/ and every package's tests/)
-        if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
         run: |
           suites=("test")
           for dir in */; do
@@ -167,15 +216,35 @@ jobs:
           fi
 
       - name: JavaScript checks
-        if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
         run: |
           git ls-files -z 'Pengu Loader/plugins/*.js' | xargs -0 -n1 node --check
           while IFS= read -r t; do
             node --test "$t"
           done < <(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u)
 
+      - name: Report failed checks
+        if: failure() && steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true' && steps.guard.outputs.broken == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        run: |
+          body="Upstream Alban1911/Rose at ${UPSTREAM_SHA} merged cleanly (Party Mode files kept our version where they collided), but the end-of-sync checks failed. Nothing was pushed.
+
+          The run log names the failing step. Fix it locally and push, then close this issue — the next scheduled sync retries."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search '"Upstream sync failed its checks" in:title' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Upstream sync failed its checks" --body "$body"
+          fi
+          exit 1
+
       - name: Push merged branch and fast-forward main
-        if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
