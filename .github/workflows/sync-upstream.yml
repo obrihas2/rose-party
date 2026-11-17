@@ -81,7 +81,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
         run: |
-          files=$(tr '\n' ',' < conflict-files.txt | sed 's/,$//')
           body="Upstream Alban1911/Rose at ${UPSTREAM_SHA} no longer merges cleanly into party-mode-hardcoded.
 
           Conflicting files:
@@ -171,9 +170,9 @@ jobs:
         if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'
         run: |
           git ls-files -z 'Pengu Loader/plugins/*.js' | xargs -0 -n1 node --check
-          for t in $(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u); do
+          while IFS= read -r t; do
             node --test "$t"
-          done
+          done < <(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u)
 
       - name: Push merged branch and fast-forward main
         if: steps.upstream.outputs.new == 'true' && steps.merge.outputs.conflict != 'true'

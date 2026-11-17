@@ -97,9 +97,9 @@ jobs:
         if: steps.exists.outputs.exists == 'false'
         run: |
           git ls-files -z 'Pengu Loader/plugins/*.js' | xargs -0 -n1 node --check
-          for t in $(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u); do
+          while IFS= read -r t; do
             node --test "$t"
-          done
+          done < <(grep -o 'node --test [^ ]*' .github/workflows/ci.yml | awk '{print $3}' | sort -u)
 
       - name: Install Inno Setup
         if: steps.exists.outputs.exists == 'false'
