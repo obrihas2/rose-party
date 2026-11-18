@@ -117,7 +117,7 @@ jobs:
             {
               echo "### Sync kept our Party Mode version"
               echo
-              printf -- '- `%s`\n' "${kept[@]}"
+              printf -- "- \`%s\`\n" "${kept[@]}"
               echo
               echo "Upstream's edits to these files were skipped this run."
             } >> "$GITHUB_STEP_SUMMARY"
