@@ -8,6 +8,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # The sync bot pushes with GITHUB_TOKEN, which does not trigger push
+  # workflows: this schedule guarantees a version the sync merged still
+  # gets its release even if the explicit dispatch is ever lost.
+  schedule:
+    - cron: "41 */6 * * *"
   workflow_dispatch:
 
 permissions:

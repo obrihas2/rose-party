@@ -251,3 +251,12 @@ jobs:
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             HEAD:refs/heads/party-mode-hardcoded HEAD:refs/heads/main
           echo "Pushed $(git rev-parse --short HEAD) to party-mode-hardcoded and main."
+
+      # A push made with GITHUB_TOKEN does not trigger on: push workflows,
+      # so the release this merge deserves has to be requested explicitly
+      # (workflow_dispatch is exempt from that suppression).
+      - name: Dispatch the release build
+        if: steps.upstream.outputs.new == 'true' && steps.keep.outputs.clean == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY"
